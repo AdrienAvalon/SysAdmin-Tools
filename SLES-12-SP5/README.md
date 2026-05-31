@@ -128,6 +128,21 @@ cat /var/log/healthcheck/2026-05-31_0900.txt       # lire l'heure concernée
 La collecte `sar` (sysstat) enregistre en plus l'historique CPU/RAM/disque : le
 script affiche le « pic CPU » passé dans sa section *Détection avancée*.
 
+### « Deux machines censées être identiques, une seule rame » — inventaire & diff
+Le mode **`-I`** décrit la machine (matériel, système, config, services) au lieu
+d'évaluer sa santé. La sortie est **triée et stable** (aucune valeur volatile),
+donc directement comparable avec `diff` :
+```bash
+# Sur chaque machine, générer un inventaire (sans couleur) :
+healthcheck-sles12.sh -I -p -n -o /tmp/inv-$(hostname).txt
+
+# Récupérer les deux fichiers, puis comparer :
+diff inv-machineA.txt inv-machineB.txt
+```
+`-p` ajoute la liste des paquets + versions (~800 lignes) — souvent **la** cause
+d'un écart (« A a mysql 5.7.40, B a 5.7.44 »). Sans `-p`, l'inventaire reste
+concis (matériel/système/config). L'inventaire **n'évalue rien** (pas de verdict).
+
 ---
 
 ## 4. Options
@@ -140,6 +155,9 @@ script affiche le « pic CPU » passé dans sa section *Détection avancée*.
 -vv         DEBUG : en plus, montre la source de chaque donnée (commande/fichier)
 -W DURÉE    SURVEILLANCE : boucle DURÉE s, n'affiche que les passes WARN/CRIT
 -i SEC      intervalle entre passes en mode -W (défaut 30)
+-I          INVENTAIRE : décrit la machine (matériel/système/config) au lieu
+            d'évaluer ; sortie triée et stable, comparable via diff
+-p          (avec -I) inclut la liste des paquets installés + versions
 -h          aide complète
 -V          version
 ```

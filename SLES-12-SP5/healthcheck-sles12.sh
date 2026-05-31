@@ -88,6 +88,13 @@
 #     latence (await, ou max(r_await,w_await) selon la version de sysstat).
 #
 # CHANGELOG
+#   2.13.0 - MODE INVENTAIRE (-I) : decrit la machine au lieu d'evaluer sa sante
+#           (materiel, systeme, CPU, RAM, stockage, points de montage, sysctl
+#           cles, services actives, profil tuned). Sortie TRIEE et STABLE (sans
+#           valeur volatile ni horodatage) concue pour comparer 2 machines via
+#           'diff' (ex. une qui rame vs une identique qui marche). Option -p :
+#           ajoute la liste des paquets+versions (rpm -qa). Reste 100% read-only ;
+#           reutilise la validation -o (anti-symlink/TOCTOU).
 #   2.12.0 - DEPENDANCES : nouveau mecanisme de SUGGESTION de paquets. Quand un
 #           outil optionnel manque (sysstat -> iostat/pidstat/sar), le check reste
 #           [----] (jamais d'erreur) et la synthese invite a l'installer :
@@ -204,7 +211,7 @@ export PATH="/usr/sbin:/usr/bin:/sbin:/bin"   # anti-detournement de binaire (ro
 export LC_ALL=C LANG=C                         # parsing deterministe (libelles EN)
 umask 077                                       # rapport lisible par le seul proprietaire
 
-readonly VERSION="2.12.0"
+readonly VERSION="2.13.0"
 readonly PROGNAME="${0##*/}"
 
 #============================ Seuils (modifiables) ============================
@@ -250,12 +257,13 @@ SERVICES_TOLERES="kdump kdump-early"
 
 #============================ Parsing des arguments ==========================
 OUTFILE=""; USE_COLOR="auto"; WATCH=0; WATCH_INTERVAL=30; VERBOSE=0
+INVENTORY=0; INV_PACKAGES=0
 
 usage() {
     cat <<USAGE
-$PROGNAME v$VERSION - health-check read-only pour SLES 12 SP5
+$PROGNAME v$VERSION - health-check & inventaire read-only pour SLES 12 SP5
 
-Usage : $PROGNAME [-w SECONDES] [-o FICHIER] [-n] [-v|-vv] [-W DUREE] [-i SECONDES] [-h] [-V]
+Usage : $PROGNAME [-w SEC] [-o FICHIER] [-n] [-v|-vv] [-W DUREE] [-i SEC] [-I [-p]] [-h] [-V]
   -w SECONDES  fenetre d'echantillonnage CPU/IO (defaut $SAMPLE_WINDOW ; 0 = instantane)
   -o FICHIER   ecrit aussi le rapport dans FICHIER (umask 077)
   -n           desactive la couleur
@@ -266,6 +274,11 @@ Usage : $PROGNAME [-w SECONDES] [-o FICHIER] [-n] [-v|-vv] [-W DUREE] [-i SECOND
   -W DUREE     mode SURVEILLANCE : boucle pendant DUREE secondes et n'affiche QUE
                les passes ou un WARN/CRIT apparait (capture une lenteur en direct).
   -i SECONDES  intervalle entre 2 passes en mode -W (defaut $WATCH_INTERVAL)
+  -I           mode INVENTAIRE : decrit la machine (materiel, systeme, config,
+               services) au lieu d'evaluer sa sante. Sortie TRIEE et stable,
+               concue pour comparer 2 machines via 'diff'. N'evalue rien.
+  -p           (avec -I) inclut la liste des PAQUETS installes + versions
+               (rpm -qa). Volumineux (~800 lignes) mais ideal pour un diff fin.
   -h           cette aide
   -V           version
 
@@ -273,15 +286,18 @@ Exemples :
   $PROGNAME                 # diagnostic ponctuel (snapshot)
   $PROGNAME -v              # idem, en montrant valeurs + seuils de chaque check
   $PROGNAME -W 600 -i 30    # surveille 10 min, alerte des qu'un seuil est franchi
+  $PROGNAME -I -n -o a.txt  # inventaire machine A -> fichier (sans couleur)
+  $PROGNAME -I -p -n -o b.txt ; diff a.txt b.txt   # comparer 2 machines
   $PROGNAME -o /var/log/healthcheck/\$(date +%F_%H%M).txt   # rapport date (cron)
 
 Codes de sortie : 0=sain  1=avertissement  2=critique  3=erreur d'usage
+                  (en mode -I : 0 = inventaire produit)
 USAGE
 }
 
 # Niveau de verbosite cumulable : -v => 1 (valeurs+seuils), -vv => 2 (debug :
 # commandes + sources de donnees). 0 = sortie concise par defaut.
-while getopts ":w:o:nvW:i:hV" opt; do
+while getopts ":w:o:nvW:i:IphV" opt; do
     case "$opt" in
         w) SAMPLE_WINDOW="$OPTARG" ;;
         o) OUTFILE="$OPTARG" ;;
@@ -289,12 +305,18 @@ while getopts ":w:o:nvW:i:hV" opt; do
         v) VERBOSE=$((VERBOSE+1)) ;;
         W) WATCH="$OPTARG" ;;
         i) WATCH_INTERVAL="$OPTARG" ;;
+        I) INVENTORY=1 ;;
+        p) INV_PACKAGES=1 ;;
         h) usage; exit 0 ;;
         V) printf '%s %s\n' "$PROGNAME" "$VERSION"; exit 0 ;;
         :) printf 'Erreur : l option -%s attend un argument.\n' "$OPTARG" >&2; exit 3 ;;
         \?) printf 'Erreur : option inconnue -%s\n' "$OPTARG" >&2; usage >&2; exit 3 ;;
     esac
 done
+# -p n'a de sens qu'avec -I : on le signale plutot que de l'ignorer en silence.
+if [ "$INV_PACKAGES" -eq 1 ] && [ "$INVENTORY" -eq 0 ]; then
+    printf 'Erreur : -p (liste des paquets) ne s utilise qu avec -I.\n' >&2; exit 3
+fi
 case "$SAMPLE_WINDOW"   in ''|*[!0-9]*) printf 'Erreur : -w attend un entier.\n' >&2; exit 3;; esac
 case "$WATCH"           in ''|*[!0-9]*) printf 'Erreur : -W attend un entier (secondes).\n' >&2; exit 3;; esac
 case "$WATCH_INTERVAL"  in ''|*[!0-9]*|0) printf 'Erreur : -i attend un entier > 0.\n' >&2; exit 3;; esac
@@ -492,6 +514,113 @@ klog_count() { printf '%s' "$KLOG" | grep -icE "$1"; }
 # klog_count_excl MOTIF EXCLU -> compte les lignes correspondant a MOTIF mais PAS
 # a EXCLU (insensible casse). Sert a ne pas confondre erreurs et messages d'init.
 klog_count_excl() { printf '%s' "$KLOG" | grep -iE "$1" | grep -ivcE "$2"; }
+
+#============================ MODE INVENTAIRE (-I) ==========================
+# Decrit la machine au lieu d'evaluer sa sante. Sortie pensee pour 'diff' entre
+# deux machines : entrees "cle: valeur", TRIEES, SANS valeur volatile (pas
+# d'horodatage, pas de % d'usage, pas de PID). 100% lecture seule. Produit
+# l'inventaire puis sort (n'execute pas le diagnostic de sante).
+if [ "$INVENTORY" -eq 1 ]; then
+    # inv SECTION : titre de bloc.   kv "cle" "valeur" : ligne alignee stable.
+    inv() { emit ""; emit "${BLD}== $* ==${RST}"; }
+    kv()  { emit "$(printf '%-22s : %s' "$1" "$2")"; }
+
+    emit "${BLD}Inventaire systeme - $(hostname 2>/dev/null || cat /proc/sys/kernel/hostname)${RST}"
+    emit "(genere par $PROGNAME v$VERSION ; comparable via 'diff' entre machines)"
+
+    # --- Systeme ---
+    inv "Systeme"
+    kv  "Hostname"     "$(hostname 2>/dev/null || cat /proc/sys/kernel/hostname 2>/dev/null)"
+    kv  "OS"           "$(awk -F= '/^PRETTY_NAME=/{gsub(/"/,"",$2);print $2}' /etc/os-release 2>/dev/null)"
+    kv  "Version ID"   "$(awk -F= '/^VERSION_ID=/{gsub(/"/,"",$2);print $2}' /etc/os-release 2>/dev/null)"
+    kv  "Noyau"        "$(uname -r)"
+    kv  "Architecture" "$(uname -m)"
+    kv  "Virtualisation" "${VIRT} (${VCLASS})"
+    # Timezone / locale : config, pas valeur volatile.
+    if have timedatectl; then
+        kv "Timezone"  "$(timedatectl 2>/dev/null | awk -F': ' '/[Tt]ime zone/{print $2}')"
+    fi
+    kv  "Locale"       "$(awk -F= '/LANG=/{print $2; exit}' /etc/locale.conf /etc/sysconfig/language 2>/dev/null || echo "${LANG:-inconnue}")"
+    kv  "Boot cmdline" "$(cat /proc/cmdline 2>/dev/null)"
+
+    # --- CPU ---
+    inv "CPU"
+    if have lscpu; then
+        # On filtre les champs STABLES (modele, topologie) ; pas les MHz courants.
+        lscpu 2>/dev/null | awk -F': +' '
+            /^Model name|^Vendor ID|^CPU\(s\)|^Thread\(s\) per core|^Core\(s\) per socket|^Socket\(s\)|^CPU max MHz|^Flags/ {
+                printf "%-22s : %s\n", $1, $2 }' | while IFS= read -r l; do emit "$l"; done
+    else
+        kv "Modele CPU" "$(awk -F': ' '/model name/{print $2; exit}' /proc/cpuinfo)"
+        kv "CPU(s)"     "$(grep -c ^processor /proc/cpuinfo)"
+    fi
+
+    # --- Memoire ---
+    inv "Memoire"
+    # Valeurs TOTALES (stables), pas l'utilisation courante (volatile).
+    kv "RAM totale"  "$(awk '/^MemTotal:/{printf "%.1f Go (%d kB)", $2/1048576, $2}' /proc/meminfo)"
+    kv "Swap total"  "$(awk '/^SwapTotal:/{printf "%.1f Go (%d kB)", $2/1048576, $2}' /proc/meminfo)"
+
+    # --- Stockage (disques physiques/virtuels, tailles stables) ---
+    inv "Stockage (disques)"
+    if have lsblk; then
+        lsblk -dno NAME,SIZE,TYPE,MODEL 2>/dev/null | sort | while IFS= read -r l; do
+            [ -n "$l" ] && emit "  $l"; done
+    fi
+
+    # --- Points de montage (cible, source, type) triés, hors pseudo-FS ---
+    inv "Points de montage"
+    if have findmnt; then
+        findmnt -rno TARGET,SOURCE,FSTYPE 2>/dev/null \
+          | grep -vE '^/(proc|sys|dev|run)' | sort \
+          | while IFS= read -r l; do emit "  $l"; done
+    else
+        awk '$2 !~ /^\/(proc|sys|dev|run)/ {print "  "$2" "$1" "$3}' /proc/mounts | sort \
+          | while IFS= read -r l; do emit "$l"; done
+    fi
+
+    # --- Reglages noyau (sysctl) souvent responsables d'ecarts de perf ---
+    inv "Parametres noyau (sysctl cles)"
+    if have sysctl; then
+        for k in vm.swappiness vm.dirty_ratio vm.dirty_background_ratio \
+                 vm.overcommit_memory net.core.somaxconn net.ipv4.tcp_max_syn_backlog \
+                 net.ipv4.ip_local_port_range fs.file-max kernel.pid_max; do
+            v=$(sysctl -n "$k" 2>/dev/null) && kv "$k" "$v"
+        done
+    fi
+
+    # --- Services actives au boot (tries) : un service de trop explique un ecart ---
+    inv "Services actives au demarrage"
+    if have systemctl; then
+        systemctl list-unit-files --state=enabled --no-legend --type=service 2>/dev/null \
+          | awk '{print $1}' | sort | while IFS= read -r l; do [ -n "$l" ] && emit "  $l"; done
+    fi
+
+    # --- Profil tuned (si present) : impacte fortement les perfs ---
+    if have tuned-adm; then
+        inv "Profil tuned"
+        kv "Profil actif" "$(TO 5 tuned-adm active 2>/dev/null | awk -F': ' '/profile/{print $2}')"
+    fi
+
+    # --- Paquets installes (optionnel -p) : LE plus discriminant pour un diff ---
+    if [ "$INV_PACKAGES" -eq 1 ]; then
+        inv "Paquets installes (nom-version)"
+        if have rpm; then
+            # Format "nom version-release" trie : un diff montre direct les ecarts.
+            rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE}\n' 2>/dev/null | sort \
+              | while IFS= read -r l; do emit "  $l"; done
+        else
+            emit "  (rpm absent : liste des paquets indisponible)"
+        fi
+    else
+        inv "Paquets installes"
+        kv "Nombre total" "$(rpm -qa 2>/dev/null | wc -l)"
+        emit "  (relancer avec -p pour la liste complete nom+version, utile au diff)"
+    fi
+
+    flush_report
+    exit 0
+fi
 
 #============================ En-tete du rapport =============================
 emit "${BLD}Health-check SLES 12 SP5  (v$VERSION)${RST}"
