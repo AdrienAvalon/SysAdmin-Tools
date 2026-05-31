@@ -49,6 +49,55 @@ l'exécuter** et le retélécharger depuis la source officielle.
 
 ---
 
+## Dépendances
+
+> **TL;DR** — le script fonctionne **sans rien installer** sur un SLES 12 SP5
+> standard. Tout ce qui est requis est livré de base. Les outils optionnels
+> améliorent la couverture ; s'ils manquent, le check concerné affiche `[----]`
+> (jamais d'erreur), et la synthèse **suggère** quoi installer.
+
+### Requis (présents par défaut sur SLES 12 SP5)
+`bash 4+`, **coreutils** (awk\*, sed\*, grep\*, cat, printf, date, sort, head,
+tail, tr, wc, cut, stat, readlink, find, nproc, uname, sleep), **util-linux**
+(lsblk, dmesg), **procps** (`vmstat`, `ps`, `free`, `uptime`), **systemd**
+(`systemctl`, `journalctl`, `timedatectl`, `systemd-detect-virt`).
+*(\* awk/sed/grep = paquets `gawk`/`sed`/`grep`, toujours présents.)*
+
+Aucune action nécessaire : ces composants font partie de toute installation,
+même minimale.
+
+### Optionnels (recommandés pour le diagnostic de lenteur)
+
+| Paquet | Apporte | Installer |
+|--------|---------|-----------|
+| **`sysstat`** | I/O disque par périphérique + par processus, et historique `sar` | `zypper install sysstat` |
+| `smartmontools` | santé SMART des disques **physiques** | `zypper install smartmontools` |
+| `mdadm` | état du RAID **logiciel** (md) | `zypper install mdadm` |
+
+> `btrfsprogs`, `snapper`, `zypper`, `iproute2` (ip/ss/nstat), `iputils` (ping)
+> sont **déjà présents par défaut** sur SLES 12 SP5 — rien à faire.
+> `ssacli`/`hpssacli` ne concernent que les serveurs **HP physiques** (RAID Smart
+> Array) et viennent du dépôt HP, pas de SUSE.
+
+### Le plus utile : `sysstat`
+C'est la seule dépendance qui vaut vraiment l'installation, car elle débloque
+**3 fonctions** (I/O par périphérique, top I/O par processus, historique `sar`).
+Sans elle, le script tourne et le signale ainsi :
+```
+  [----] I/O par device : iostat absent (paquet sysstat)
+  ...
+  Pour un diagnostic plus complet (optionnel) :
+    - sysstat : I/O disque par peripherique + par processus, et historique sar
+    Installer : zypper install sysstat
+```
+Pour activer **en plus** l'historique (lenteurs passées) :
+```bash
+zypper install sysstat
+systemctl enable --now sysstat   # démarre la collecte (toutes les 10 min)
+```
+
+---
+
 ## 3. Les 3 situations typiques
 
 | Situation | Commande |

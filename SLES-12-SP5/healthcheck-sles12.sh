@@ -88,6 +88,12 @@
 #     latence (await, ou max(r_await,w_await) selon la version de sysstat).
 #
 # CHANGELOG
+#   2.12.0 - DEPENDANCES : nouveau mecanisme de SUGGESTION de paquets. Quand un
+#           outil optionnel manque (sysstat -> iostat/pidstat/sar), le check reste
+#           [----] (jamais d'erreur) et la synthese invite a l'installer :
+#           "Pour un diagnostic plus complet ... zypper install sysstat".
+#           Suggestions dedoublonnees ; n'apparaissent que si un paquet manque.
+#           Confirme : le script tourne pleinement sans sysstat (teste).
 #   2.11.0 - DOCUMENTATION / REPRISE : en-tete remis a jour (version, usage, et
 #           limites etaient obsoletes) ; ajout d'une TABLE DES MATIERES et d'un
 #           guide "POUR REPRENDRE / ETENDRE CE SCRIPT" (flux du verdict, ajout
@@ -198,7 +204,7 @@ export PATH="/usr/sbin:/usr/bin:/sbin:/bin"   # anti-detournement de binaire (ro
 export LC_ALL=C LANG=C                         # parsing deterministe (libelles EN)
 umask 077                                       # rapport lisible par le seul proprietaire
 
-readonly VERSION="2.11.0"
+readonly VERSION="2.12.0"
 readonly PROGNAME="${0##*/}"
 
 #============================ Seuils (modifiables) ============================
@@ -419,6 +425,17 @@ vdebug() { [ "$VERBOSE" -ge 2 ] && emit "         ${BLU}# source:${RST} $*"; ret
 HINTS=""
 add_hint() { HINTS="${HINTS} - $*"$'\n'; }
 
+# SUGGESTIONS DE PAQUETS : quand un outil OPTIONNEL manque et prive le rapport
+# d'informations utiles, on note le paquet a installer (dedoublonne). La synthese
+# finale invite alors l'utilisateur a l'installer pour une couverture complete.
+# Le script reste pleinement fonctionnel sans : c'est une suggestion, pas une erreur.
+MISSING_PKGS=""
+suggest_pkg() {   # suggest_pkg PAQUET "ce que ca apporte"
+    case " $MISSING_PKGS " in *" $1 "*) return 0;; esac   # deja note
+    MISSING_PKGS="${MISSING_PKGS}${1} "
+    PKG_REASONS="${PKG_REASONS:-}${1} : ${2}"$'\n'
+}
+
 fcmp() { awk -v a="$1" -v b="$3" -v op="$2" 'BEGIN{
     if(op==">")  exit !(a>b);  if(op=="<")  exit !(a<b);
     if(op==">=") exit !(a>=b); if(op=="<=") exit !(a<=b); exit 1 }'; }
@@ -636,7 +653,10 @@ if have iostat; then
     else
         info "Aucune activite I/O mesurable sur la fenetre (devices au repos)"
     fi
-else skip "I/O par device : iostat absent (paquet sysstat)"; fi
+else
+    skip "I/O par device : iostat absent (paquet sysstat)"
+    suggest_pkg sysstat "I/O disque par peripherique + par processus, et historique sar"
+fi
 
 #============================ 5. Integrite FS (lecture seule) ===============
 hdr "Integrite systeme de fichiers"
@@ -1001,6 +1021,7 @@ if [ "$IS_CONTAINER" -eq 0 ] && have pidstat; then
     fi
 elif [ "$IS_CONTAINER" -eq 0 ]; then
     skip "Top I/O par processus : pidstat absent (paquet sysstat)"
+    suggest_pkg sysstat "I/O disque par peripherique + par processus, et historique sar"
 fi
 
 # --- Correlation SYMPTOME -> CAUSE : on relie chaque signe de lenteur detecte
@@ -1121,6 +1142,10 @@ if have sar; then
         info "Historique sar inactif : pour tracer les lenteurs PASSEES, activer la collecte"
         info "  (commande, A LANCER MANUELLEMENT) : systemctl enable --now sysstat"
     fi
+else
+    # sar absent => sysstat pas installe du tout. On le signale et on le suggere.
+    skip "Historique sar : sar absent (paquet sysstat)"
+    suggest_pkg sysstat "I/O disque par peripherique + par processus, et historique sar"
 fi
 
 #============================ 15. Diagnostic redige ========================
@@ -1195,6 +1220,16 @@ if [ -n "$HINTS" ]; then
 elif [ "$N_WARN" -eq 0 ] && [ "$N_CRIT" -eq 0 ]; then
     emit ""
     emit " Aucun symptome de lenteur detecte (CPU/IO/memoire/swap dans les normes)."
+fi
+# Suggestions de paquets : si des outils optionnels manquent, on invite (une
+# seule fois, dedoublonne) a les installer pour une couverture complete. Le
+# rapport reste valide sans : ces checks ont juste ete marques [----].
+if [ -n "$MISSING_PKGS" ]; then
+    emit ""
+    emit " ${BLD}Pour un diagnostic plus complet${RST} (optionnel) :"
+    while IFS= read -r _p; do [ -n "$_p" ] && emit "   - $_p"; done < <(printf '%s' "${PKG_REASONS:-}")
+    # On retire l'espace final de MISSING_PKGS pour une commande propre.
+    emit "   Installer : ${BLD}zypper install ${MISSING_PKGS% }${RST}"
 fi
 [ -n "$OUTFILE" ] && emit " Rapport ecrit dans : $OUTFILE"
 emit "${BLD}============================================================${RST}"
