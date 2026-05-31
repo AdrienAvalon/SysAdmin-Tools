@@ -88,6 +88,12 @@
 #     latence (await, ou max(r_await,w_await) selon la version de sysstat).
 #
 # CHANGELOG
+#   2.15.0 - REACTIVITE CHARGE (issu d'un stress-test) : le script lit desormais
+#           load1 (moyenne 1 min) EN PLUS de load5. Le verdict reste pilote par
+#           load5 (anti-faux-positif sur un pic bref), mais une surcharge RECENTE
+#           (load1 > seuil alors que load5 n'a pas encore monte) est signalee en
+#           [INFO] + alimente les pistes de lenteur, avec le processus suspect.
+#           Comble l'angle mort "ca rame maintenant" sur une charge de < 5 min.
 #   2.14.1 - AUDIT : -I (inventaire) et -W (surveillance) sont desormais refuses
 #           ensemble (exit 3) au lieu de laisser -W primer silencieusement. Seul
 #           defaut releve par l'audit complet ; reste 100% read-only, ShellCheck 0.
@@ -219,7 +225,7 @@ export PATH="/usr/sbin:/usr/bin:/sbin:/bin"   # anti-detournement de binaire (ro
 export LC_ALL=C LANG=C                         # parsing deterministe (libelles EN)
 umask 077                                       # rapport lisible par le seul proprietaire
 
-readonly VERSION="2.14.1"
+readonly VERSION="2.15.0"
 readonly PROGNAME="${0##*/}"
 
 #============================ Seuils (modifiables) ============================
@@ -711,12 +717,25 @@ hdr "Charge & CPU"
 [ "$IS_CONTAINER" -eq 1 ] && info "Conteneur : load/iowait/steal refletent l'HOTE, pas le conteneur"
 CORES=$(nproc 2>/dev/null || echo 1)
 vdebug "/proc/loadavg + nproc"
-read -r _ L5 _ </proc/loadavg
+# load1 = moyenne 1 min (REACTIVE, voit une surcharge recente), load5 = 5 min
+# (STABLE, anti-faux-positif). Le VERDICT reste pilote par load5 : un pic bref ne
+# doit pas declencher un CRIT. Mais on lit aussi load1 pour la REACTIVITE : si
+# load1 est deja au-dessus du seuil alors que load5 n'a pas encore monte, c'est
+# une surcharge EN COURS ("ca rame maintenant") -> on l'expose (info + piste).
+read -r L1 L5 _ </proc/loadavg
 RATIO=$(awk -v l="$L5" -v c="$CORES" 'BEGIN{printf "%.2f", l/c}')
+RATIO1=$(awk -v l="$L1" -v c="$CORES" 'BEGIN{printf "%.2f", l/c}')
 if   fcmp "$RATIO" ">" "$LOAD_CRIT_PER_CORE"; then crit "Load5 $L5 sur $CORES coeurs (ratio $RATIO/coeur)"
 elif fcmp "$RATIO" ">" "$LOAD_WARN_PER_CORE"; then warn "Load5 $L5 sur $CORES coeurs (ratio $RATIO/coeur)"
 else ok "Load5 $L5 sur $CORES coeurs (ratio $RATIO/coeur)"; fi
 metric "ratio load5/coeur" "$RATIO" "$LOAD_WARN_PER_CORE" "$LOAD_CRIT_PER_CORE"
+metric "ratio load1/coeur" "$RATIO1" "$LOAD_WARN_PER_CORE" "$LOAD_CRIT_PER_CORE"
+# Surcharge RECENTE : load1 franchit le seuil WARN alors que load5 ne l'a pas
+# encore atteint (la moyenne 5 min "retarde"). Signal de reactivite, pas un
+# verdict : on informe et on alimente les pistes de lenteur.
+if fcmp "$RATIO1" ">" "$LOAD_WARN_PER_CORE" && ! fcmp "$RATIO" ">" "$LOAD_WARN_PER_CORE"; then
+    info "Charge RECENTE en hausse : load1 ratio ${RATIO1}/coeur (load5 encore bas) -> surcharge qui monte"
+fi
 if [ "$VMSTAT_OK" -eq 1 ]; then
     vdebug "vmstat $SAMPLE_INTERVAL (moyenne sur ${SAMPLE_WINDOW}s)"
     if   [ "$WA" -ge "$IOWAIT_CRIT" ]; then crit "iowait moyen ${WA}% sur ${SAMPLE_WINDOW}s (attente disque)"
@@ -1208,6 +1227,10 @@ fi
 #     l'outil en aide a la decision ("la lenteur vient de X").
 if [ "$VMSTAT_OK" -eq 1 ] && fcmp "$RATIO" ">" "$LOAD_WARN_PER_CORE"; then
     add_hint "Charge CPU elevee (ratio ${RATIO}/coeur)${TOP_CPU_DESC:+ -> suspect : $TOP_CPU_DESC}"
+# Surcharge RECENTE (load1) sans que load5 ait encore monte : piste de reactivite
+# ("ca rame en ce moment"), distincte de la charge soutenue ci-dessus.
+elif fcmp "$RATIO1" ">" "$LOAD_WARN_PER_CORE"; then
+    add_hint "Charge CPU en hausse recente (load1 ratio ${RATIO1}/coeur)${TOP_CPU_DESC:+ -> suspect : $TOP_CPU_DESC}"
 fi
 if [ "$VMSTAT_OK" -eq 1 ] && [ "$WA" -ge "$IOWAIT_WARN" ]; then
     add_hint "Attente disque elevee (iowait ${WA}%)${TOP_IO_DESC:+ -> suspect : $TOP_IO_DESC}"
