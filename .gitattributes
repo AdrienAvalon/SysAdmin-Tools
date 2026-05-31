@@ -1,0 +1,10 @@
+# Normalisation des fins de ligne : les scripts shell DOIVENT rester en LF.
+# Un CRLF (clone depuis Windows) casserait le shebang et l'execution sous Linux.
+*.sh    text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.sha256 text eol=lf
+LICENSE  text eol=lf
+
+# Par defaut : laisser git detecter, mais normaliser en LF dans le depot.
+* text=auto eol=lf
