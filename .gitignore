@@ -1,0 +1,9 @@
+# Rapports générés localement (ne pas versionner)
+*.report.txt
+/var/log/healthcheck/
+
+# Fichiers temporaires / éditeurs
+*~
+*.swp
+*.tmp
+.DS_Store
