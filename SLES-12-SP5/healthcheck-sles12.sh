@@ -88,6 +88,9 @@
 #     latence (await, ou max(r_await,w_await) selon la version de sysstat).
 #
 # CHANGELOG
+#   2.14.1 - AUDIT : -I (inventaire) et -W (surveillance) sont desormais refuses
+#           ensemble (exit 3) au lieu de laisser -W primer silencieusement. Seul
+#           defaut releve par l'audit complet ; reste 100% read-only, ShellCheck 0.
 #   2.14.0 - INVENTAIRE : ajout d'un bloc "Versions des composants cles" (liste
 #           curee INV_KEY_PACKAGES : langages, serveurs, daemons). Affiche les
 #           versions des composants importants REELLEMENT installes, sans avoir a
@@ -216,7 +219,7 @@ export PATH="/usr/sbin:/usr/bin:/sbin:/bin"   # anti-detournement de binaire (ro
 export LC_ALL=C LANG=C                         # parsing deterministe (libelles EN)
 umask 077                                       # rapport lisible par le seul proprietaire
 
-readonly VERSION="2.14.0"
+readonly VERSION="2.14.1"
 readonly PROGNAME="${0##*/}"
 
 #============================ Seuils (modifiables) ============================
@@ -334,6 +337,13 @@ done
 # -p n'a de sens qu'avec -I : on le signale plutot que de l'ignorer en silence.
 if [ "$INV_PACKAGES" -eq 1 ] && [ "$INVENTORY" -eq 0 ]; then
     printf 'Erreur : -p (liste des paquets) ne s utilise qu avec -I.\n' >&2; exit 3
+fi
+# -I (inventaire ponctuel) et -W (surveillance en boucle) sont deux modes
+# mutuellement exclusifs : les combiner n'a pas de sens (on inventorie une fois,
+# on ne surveille pas un inventaire). On refuse explicitement plutot que de
+# laisser l'un primer silencieusement sur l'autre.
+if [ "$INVENTORY" -eq 1 ] && [ "$WATCH" -gt 0 ]; then
+    printf 'Erreur : -I (inventaire) et -W (surveillance) sont exclusifs.\n' >&2; exit 3
 fi
 case "$SAMPLE_WINDOW"   in ''|*[!0-9]*) printf 'Erreur : -w attend un entier.\n' >&2; exit 3;; esac
 case "$WATCH"           in ''|*[!0-9]*) printf 'Erreur : -W attend un entier (secondes).\n' >&2; exit 3;; esac
