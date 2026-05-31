@@ -139,9 +139,15 @@ healthcheck-sles12.sh -I -p -n -o /tmp/inv-$(hostname).txt
 # Récupérer les deux fichiers, puis comparer :
 diff inv-machineA.txt inv-machineB.txt
 ```
-`-p` ajoute la liste des paquets + versions (~800 lignes) — souvent **la** cause
-d'un écart (« A a mysql 5.7.40, B a 5.7.44 »). Sans `-p`, l'inventaire reste
-concis (matériel/système/config). L'inventaire **n'évalue rien** (pas de verdict).
+Même **sans `-p`**, l'inventaire affiche un bloc **« Versions des composants
+clés »** : les versions des langages/serveurs/daemons importants réellement
+installés (kernel, glibc, openssl, openssh, mariadb, postgresql, apache2, php,
+python, java, docker, chrony…). C'est le juste milieu — on voit tout de suite
+« A a mariadb 10.2, B a 10.4 » sans dumper 800 lignes. La liste est ajustable
+en tête du script (`INV_KEY_PACKAGES`).
+
+`-p` ajoute en plus la liste **complète** des paquets + versions (~800 lignes),
+pour un diff exhaustif. L'inventaire **n'évalue rien** (pas de verdict).
 
 ---
 

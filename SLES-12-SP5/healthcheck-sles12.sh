@@ -88,6 +88,11 @@
 #     latence (await, ou max(r_await,w_await) selon la version de sysstat).
 #
 # CHANGELOG
+#   2.14.0 - INVENTAIRE : ajout d'un bloc "Versions des composants cles" (liste
+#           curee INV_KEY_PACKAGES : langages, serveurs, daemons). Affiche les
+#           versions des composants importants REELLEMENT installes, sans avoir a
+#           dumper les ~800 paquets (-p). C'est le juste milieu pour comparer 2
+#           machines ("A: mariadb 10.2 / B: 10.4"). Liste modifiable en tete.
 #   2.13.0 - MODE INVENTAIRE (-I) : decrit la machine au lieu d'evaluer sa sante
 #           (materiel, systeme, CPU, RAM, stockage, points de montage, sysctl
 #           cles, services actives, profil tuned). Sortie TRIEE et STABLE (sans
@@ -211,7 +216,7 @@ export PATH="/usr/sbin:/usr/bin:/sbin:/bin"   # anti-detournement de binaire (ro
 export LC_ALL=C LANG=C                         # parsing deterministe (libelles EN)
 umask 077                                       # rapport lisible par le seul proprietaire
 
-readonly VERSION="2.13.0"
+readonly VERSION="2.14.0"
 readonly PROGNAME="${0##*/}"
 
 #============================ Seuils (modifiables) ============================
@@ -254,6 +259,19 @@ LOOKBACK="24 hours ago"   # fenetre temporelle des checks bases sur le journal
 # mais son absence n'empeche pas la machine de tourner ; souvent desactive en VM.
 # Lister soit le nom court ("kdump"), soit complet ("kdump.service"), espaces.
 SERVICES_TOLERES="kdump kdump-early"
+
+# Composants "notables" dont la VERSION est affichee dans l'inventaire (-I) si le
+# paquet est installe. C'est le juste milieu entre "juste un nombre" et "les 800
+# paquets" (-p) : on cible langages, serveurs, daemons cles -> ce qu'on compare
+# en priorite entre 2 machines. Liste librement modifiable (noms de paquets rpm).
+INV_KEY_PACKAGES="kernel-default glibc systemd bash coreutils util-linux \
+openssh openssl libopenssl1_0_0 zypper rpm \
+mariadb mysql postgresql postgresql-server apache2 nginx \
+postfix sendmail bind dovecot vsftpd samba nfs-kernel-server \
+php7 php8 php python python3 python36 perl ruby \
+java-1_8_0-openjdk java-11-openjdk nodejs docker podman containerd \
+chrony ntp rsyslog syslog-ng wicked NetworkManager sysstat sudo \
+haproxy keepalived redis memcached"
 
 #============================ Parsing des arguments ==========================
 OUTFILE=""; USE_COLOR="auto"; WATCH=0; WATCH_INTERVAL=30; VERBOSE=0
@@ -600,6 +618,28 @@ if [ "$INVENTORY" -eq 1 ]; then
     if have tuned-adm; then
         inv "Profil tuned"
         kv "Profil actif" "$(TO 5 tuned-adm active 2>/dev/null | awk -F': ' '/profile/{print $2}')"
+    fi
+
+    # --- Versions des composants CLES (liste curee INV_KEY_PACKAGES) ---
+    # Affiche uniquement les paquets REELLEMENT installes, tries. C'est l'info la
+    # plus utile pour comparer 2 machines sans dumper les 800 paquets (-p).
+    inv "Versions des composants cles"
+    if have rpm; then
+        # rpm -q en UNE passe sur toute la liste, format "nom version-release".
+        # Les non-installes produisent "paquet ... n'est pas installe" : filtres.
+        # On capture d'abord le resultat, puis on l'affiche (sous-shell de pipe
+        # evite, et permet de savoir si la liste est vide). read -ra : on passe la
+        # liste en tableau pour ne pas dependre du word-splitting non quote.
+        read -ra _kp_arr <<<"$INV_KEY_PACKAGES"
+        _kp_out=$(rpm -q --qf '%{NAME} %{VERSION}-%{RELEASE}\n' "${_kp_arr[@]}" 2>/dev/null \
+                  | grep -vE 'is not installed|n.est pas install' | sort)
+        if [ -n "$_kp_out" ]; then
+            while IFS= read -r l; do emit "  $l"; done < <(printf '%s\n' "$_kp_out")
+        else
+            emit "  (aucun des composants cles listes n'est installe)"
+        fi
+    else
+        emit "  (rpm absent : versions indisponibles)"
     fi
 
     # --- Paquets installes (optionnel -p) : LE plus discriminant pour un diff ---
