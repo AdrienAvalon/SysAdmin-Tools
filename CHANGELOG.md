@@ -5,6 +5,12 @@ en tête de chaque script (rubrique `CHANGELOG`).
 
 ## healthcheck-sles12.sh
 
+### 2.15.0
+- Réactivité charge (issu d'un stress-test) : lecture de `load1` (1 min) en plus
+  de `load5`. Le verdict reste piloté par `load5` (anti-faux-positif), mais une
+  surcharge récente (`load1` élevé, `load5` encore bas) est signalée + alimente
+  les pistes. Comble l'angle mort « ça rame maintenant » sur une charge < 5 min.
+
 ### 2.14.1
 - Audit complet (statique + dynamique + read-only + sécurité) : RAS majeur.
 - Correctif : `-I` (inventaire) et `-W` (surveillance) refusés ensemble (exit 3).
