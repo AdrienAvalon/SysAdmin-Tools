@@ -1,0 +1,41 @@
+name: ShellCheck
+
+# Vérifie automatiquement, à chaque push / pull request, que tous les scripts
+# shell du dépôt passent ShellCheck sans avertissement. C'est une preuve
+# publique et continue de la qualité (le badge du README reflète ce job).
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+
+jobs:
+  shellcheck:
+    name: Analyse statique (ShellCheck)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Lancer ShellCheck sur tous les .sh
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y shellcheck
+          echo "Version : $(shellcheck --version | awk '/version:/{print $2}')"
+          # Tous les scripts .sh du dépôt doivent passer sans avertissement.
+          fail=0
+          while IFS= read -r f; do
+            echo "::group::shellcheck $f"
+            if shellcheck -s bash "$f"; then
+              echo "OK : $f"
+            else
+              echo "::error file=$f::ShellCheck a signalé des problèmes"
+              fail=1
+            fi
+            echo "::endgroup::"
+          done < <(find . -type f -name '*.sh')
+          exit "$fail"
